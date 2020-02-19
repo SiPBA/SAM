@@ -15,57 +15,63 @@ function sam(appData)
 
     % For non-GUI executions, the input argument should be:
     %   appdata.class0.files:       Files with images of class 0 (cell array)
-    %   appdata.class0.path:        Path of files with images of class 0
     %   appdata.class0.files:       Files with images of class 1 (cell array)
-    %   appdata.class0.path:        Path of files with images of class 1
-    %   appdata.atlas.file:         Name of the atlas file (NII format)
-    %   appdata.atlas.path:         Path of the atlas file
-    %   appdata.outpus.file:        Name of the file that will be generated
-    %                               (SAM map)
-    %   appdata.output.path:        Path of the file that will be generated
     %   appdata.method.fs:          Feature selection method: Posible values: 
     %                               'anova', 'ttest','entropy','wilcoxon','roc'
     %   appdata.method.fsMaxReg:    Number of features seleted
     %   appdata.method.fe:          Feature extraction method: Posible
-    %                               values: 'pls
+    %                               values: 'pls'
     %   appdata.method.feComp:      Number of features extracted
     %
     
-    if nargin<1
-        sam_gui()
-        return
+    %% Initial checks
+    
+    % Check LOADNII toolbox
+    if exist('load_nii.m','file') ~= 2
+        error(['NIFTI toolbox required. Please download and install it from: ' ...
+               'es.mathworks.com/matlabcentral/fileexchange/8797-tools-for-nifti-and-analyze-image']);
     end
 
-    if appData.gui, bar = waitbar(0, 'Staring SAM...'); else bar = 0; end
-    
+    % If no input arguments, launch GUI
+    if nargin<1, sam_gui(); return; end
+
+    % Show waitbar if GUI was loaded
+    if appData.gui, bar = waitbar(0, 'Starting SAM...'); else bar = 0; end
+        
+    %% Save self path
+    appData.samPath = fileparts(which('sam'));
+
     %% Load images and atlas
     appData = loadData(appData, bar);
+    if isempty(appData.images.stack) || isempty(appData.atlas.nii)
+        if bar ~= 0, close(bar), end
+        return
+    end
 
     %% Estimate accuracy
     
     predictedLabels = [];
     acc = [];
+    fprintf('Analyzing region:                     \n');
     for reg = 1:appData.atlas.numReg
-        disp(['Parcellation of region: ' appData.atlas.nameReg{reg}])
-        if bar~=0, waitbar(reg/appData.atlas.numReg, bar, 'Parcellating regions'); end
+        fprintf('\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b');
+        fprintf('%-20s\n', appData.atlas.nameReg{reg}(1:min(end,20)))
+        if bar~=0, waitbar(reg/appData.atlas.numReg, bar, 'Analyzing regions'); end
 
         voxelReg = appData.atlas.nii.img == reg;    % ROI selection mask
         trnData = appData.images.stack(:,voxelReg); % ROI selection
         trnLabels = appData.images.labels;
 
         % Feature selection
-        disp('Feature selection.....');
         featIdx = sam_featureSelection(trnData, trnLabels, ...
                                 appData.method.fs, appData.method.fsMaxReg);
         trnData = trnData(:, featIdx);
 
         % Feature extraction
-        disp('Feature _Extraction.....');
         feats = sam_featureExtraction(trnData, trnLabels, ...
                                 appData.method.fe, appData.method.feComp);
         
-        % Binary fitting on Feature Space
-        disp('Fitting linear classifer (SVM).....');
+        % Binary fitting on feature space
         t = templateSVM('KernelFunction','linear','Standardize',1);
         mdl = fitcecoc(feats, trnLabels, 'Learners', t, ...
                         'ClassNames', unique(trnLabels));
@@ -77,8 +83,8 @@ function sam(appData)
         acc(reg) = sum(oofLabels==trnLabels)/numel(trnLabels);
     end
 
+    fprintf('\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\bAll\n');
     disp(['Averaged accuracy for resubs: ' num2str(mean(acc))]);
-    
 
 
     %% Statistical Inference
@@ -97,109 +103,96 @@ function sam(appData)
     % Compute indices of significative regions
     sigReg = p < alpha;
     
-    % Plot bounds
-    drawBounds(acc, boundVC, boundG, boundGZ, sigReg, appData.atlas.nameReg, p)
-    
-
     %% Obtaining SAM map
 
     if bar~=0, waitbar(1, bar, 'Generating SAM map'); end
 
-    % Initialize SAM map
+    % Initialize SAM map y p-Value map
     samMap = zeros(size(appData.atlas.nii.img));
 
-    % Estimate all ROIs. Non-releavant ROIs are set to 0.1 to preserve atlas shape
+    % Estimate all ROIs. Non-releavant ROIs are set to NaN
     for reg = 1:appData.atlas.numReg
-        if sigReg(reg), activ = acc(reg); else, activ = 0.1; end
+        if sigReg(reg), activ = acc(reg); else, activ = nan; end
         samMap(appData.atlas.nii.img == reg) = activ;
     end
 
-    % Save SAM map
-    origin = appData.atlas.nii.hdr.hist.originator(1:3); 
-    pixdim = appData.atlas.nii.hdr.dime.pixdim(2:4);
-    datatype = 16;
-    samNii = make_nii(samMap, pixdim, origin, datatype);
-    save_nii(samNii, fullfile(appData.output.path, appData.output.file));
-    
+    % Close wait bar
     if bar~=0, close(bar); end
+
+    % Show results
+    res.acc = acc;
+    res.p = p;
+    res.boundVC = boundVC;
+    res.boundG = boundG;
+    res.boundGZ = boundGZ;
+    res.sigReg = sigReg;
+    res.mapBg = squeeze(mean(appData.images.stack));  % Background
+    res.map = samMap;
+    %res.pMap = pMap;
+    sam_showResults(res, appData.atlas);
+    
 end
 
-function drawBounds(acc, boundVC, boundG, boundGZ, sigReg, nameReg, p)
-    figure;
-    subplot(1, 2, 1);
-    plot(acc);
-    hold on
-    plot(acc - boundVC, '-*');
-    plot(acc - boundG, '-^');
-    plot(acc - boundGZ, '-+');
-    plot(0.5 * ones(size(acc)), '-.');
-    legend({'$1-P_n(\hat{g_n})$','$1-P(\hat{g_n})$ worst case VC',...
-        '$1-P(\hat{g_n})$ worst case G','$1-P(\hat{g_n})$ worst case GZ',...
-        'random'},'Interpreter','latex');
-    xticks(find(sigReg))
-    xticklabels(nameReg(sigReg));
-    xtickangle(45);
-    ylabel('$1-P_n(g_n)$','Interpreter','latex')
-    xlabel('116 Standardized Regions')
-    grid on;
-    set(groot,'defaultAxesTickLabelInterpreter','none')
-    hold off
-
-    % Ploting Test and upper bounds
-    subplot(1, 2, 2);
-    hAx = plotyy(1:length(acc), acc - boundG, 1:length(acc), log(p));
-    title('Significance test for a proportion')
-    xticks(find(sigReg))
-    xticklabels(nameReg(sigReg));
-    xtickangle(45);
-    set(groot,'defaultAxesTickLabelInterpreter','none')
-    xlabel('116 Standardized Regions')
-    ylabel(hAx(1),'$1-P_n(g_n)$','Interpreter','latex') % left y-axis
-    ylabel(hAx(2),'log(p-value)') % right y-axis
-    yticks(hAx(2),[log(0.0005):1:log(0.05) log(0.05):1:log(1)]);
-    yticks(hAx(1),0.3:0.1:0.9);
-    legend({'$1-P(\hat{g_n})$ worst case G','log(p-value)'},...
-            'Interpreter','latex');
-
-end
 
 function appData = loadData(appData, bar)
-    stack = [];
     num0 = numel(appData.class0.files);
     num1 = numel(appData.class1.files);
+    num = num0 + num1;
+    files = [appData.class0.files appData.class1.files];
 
-    % Load class 0 images
-    disp('Loading images for class 0');
-    for j=1:num0
-        disp(['Subject ' num2str(j) ' out of ' num2str(num0)]);
-        if bar~=0, waitbar(j/num0, bar, 'Loading subjects in class 0'); end
-        fileName = fullfile(appData.class0.path, appData.class0.files{j});
-        nii = load_nii(fileName);
+    % Initialize variables
+    stack = [];
+    sz = [];
+    vx = [];
+    atlasNii = [];
+
+    % Load images
+    fprintf('Loading images        \n')
+    for j=1:num
+        fprintf('\b\b\b\b\b\b\b\b%3d/%3d\n', j, num)
+        if bar~=0, waitbar(j/num, bar, 'Loading images'); end
+        nii = load_nii(files{j});
         if isempty(stack)
             sz = size(nii.img);
-            stack = zeros(num0+num1, sz(1), sz(2), sz(3));
+            vx = nii.hdr.dime.pixdim(2:4);
+            stack = zeros(num, sz(1), sz(2), sz(3));
+        elseif ~all(sz==size(nii.img)) || ~all(vx==nii.hdr.dime.pixdim(2:4))
+            msg = ['ERROR! Images have different sizes. All of them ' ...
+                    'should registered using the same template.'];
+            msgbox(msg)
+            disp(msg)
+            stack = [];
+            break
         end
         stack(j,:,:,:) = nii.img;
     end
 
-    % Load class 1 images
-    disp('Loading images for class 1');
-    for j=1:num1
-        disp(['Subject ' num2str(j) ' out of ' num2str(num1)]);
-        if bar~=0, waitbar(j/num1, bar, 'Loading subjects in class 1'); end
-        fileName = fullfile(appData.class1.path, appData.class1.files{j});
-        nii = load_nii(fileName);
-        if isempty(stack)
-            sz = size(nii.img);
-            stack = zeros(num0+num1, sz(1), sz(2), sz(3));
-        end
-        stack(num0+j,:,:,:) = nii.img;
-    end
-
     % Load atlas
-    disp('Loading atlas');
-    if bar~=0, waitbar(1, bar, 'Loading atlas'); end
-    atlasNii = load_nii(fullfile(appData.atlas.path, appData.atlas.file));
+    if ~isempty(stack)
+        disp('Loading atlas');
+        if bar~=0, waitbar(1, bar, 'Loading atlas'); end
+        atlasFile = fullfile(appData.samPath, 'atlas', ...
+            ['atlas' num2str(sz,'_%i') num2str(round(vx*10),'_%i') '.nii']);
+        if exist(atlasFile, 'file')
+            atlasNii = load_nii(atlasFile);
+        else
+            msg = ['ERROR! Invalid image size. Images must be of one ' ...
+                   'of the following sizes:\n'];
+            ls = dir(fullfile(appData.samPath, 'atlas', 'atlas*.nii'));
+            for i=1:numel(ls)
+                [~, n, ~] = fileparts(ls(i).name);
+                p = strsplit(n, '_');
+                if length(p)<7, continue; end
+                vxa = str2num([p{5} ' ' p{6} ' ' p{7}])/10;
+                msg = [msg '- Volume: ' p{2} ' x ' p{3} ' x ' p{4} ...
+                           '  Voxel size: ' num2str(vxa(1)) ' x ' ...
+                           num2str(vxa(2)) ' x ' num2str(vxa(3)) '\n'];
+            end
+            msgbox(sprintf(msg))
+            fprintf(msg)
+        end
+    end
+    
     nameReg = {'Precentral_L','Precentral_R','Frontal_Sup_L','Frontal_Sup_R', ...
         'Frontal_Sup_Orb_L','Frontal_Sup_Orb_R','Frontal_Mid_L','Frontal_Mid_R',...
         'Frontal_Mid_Orb_L', 'Frontal_Mid_Orb_R','Frontal_Inf_Oper_L', ...
@@ -236,7 +229,7 @@ function appData = loadData(appData, bar)
     appData.images.labels = [zeros(num0, 1); ones(num1, 1)];
     appData.images.num0 = num0;
     appData.images.num1 = num1;
-    appData.images.num = num0 + num1;
+    appData.images.num = num;
     appData.atlas.nii = atlasNii;
     appData.atlas.nameReg = nameReg';
     appData.atlas.numReg = length(nameReg);
