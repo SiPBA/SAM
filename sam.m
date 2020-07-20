@@ -11,7 +11,7 @@
 %   CONCENTRATION INEQUALITIES.
 %   Doi: https://doi.org/10.1101/2019.12.27.889436.
 %
-function sam(appData)
+function out = sam(appData)
 
     % For non-GUI executions, the input argument should be:
     %   appdata.class0.files:       Files with images of class 0 (cell array)
@@ -35,6 +35,12 @@ function sam(appData)
     % If no input arguments, launch GUI
     if nargin<1, sam_gui(); return; end
 
+    if ~isfield(appData, 'gui'), appData.gui = 0; end
+    if ~isfield(appData, 'verbose'), appData.verbose = 1; end
+    if ~isfield(appData, 'stat'), appData.stat = []; end
+    if ~isfield(appData.stat, 'boundMethod'), appData.stat.boundMethod = ''; end
+    if ~isfield(appData.stat, 'alpha'), appData.stat.alpha = 0.05; end
+    
     % Show waitbar if GUI was loaded
     if appData.gui, bar = waitbar(0, 'Starting SAM...'); else bar = 0; end
         
@@ -42,49 +48,63 @@ function sam(appData)
     appData.samPath = fileparts(which('sam'));
 
     %% Load images and atlas
-    appData = loadData(appData, bar);
-    if isempty(appData.images.stack) || isempty(appData.atlas.nii)
-        if bar ~= 0, close(bar), end
-        return
+    if ~isfield(appData, 'images')
+        appData = loadData(appData, bar);
+        if isempty(appData.images.stack) || isempty(appData.atlas.nii)
+            if bar ~= 0, close(bar), end
+            return
+        end
     end
-
     %% Estimate accuracy
     
     predictedLabels = [];
     acc = [];
-    fprintf('Analyzing region:                     \n');
+    if appData.verbose, fprintf('Analyzing region:                     \n'); end
     for reg = 1:appData.atlas.numReg
-        fprintf('\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b');
-        fprintf('%-20s\n', appData.atlas.nameReg{reg}(1:min(end,20)))
+        if appData.verbose
+            fprintf('\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b');
+            fprintf('%-20s\n', appData.atlas.nameReg{reg}(1:min(end,20)))
+        end
         if bar~=0, waitbar(reg/appData.atlas.numReg, bar, 'Analyzing regions'); end
 
         voxelReg = appData.atlas.nii.img == reg;    % ROI selection mask
         trnData = appData.images.stack(:,voxelReg); % ROI selection
         trnLabels = appData.images.labels;
-
+        
         % Feature selection
         featIdx = sam_featureSelection(trnData, trnLabels, ...
                                 appData.method.fs, appData.method.fsMaxReg);
         trnData = trnData(:, featIdx);
 
+        if isempty(featIdx)
+            acc(reg) = 0;
+            continue
+        end
+        
         % Feature extraction
         feats = sam_featureExtraction(trnData, trnLabels, ...
                                 appData.method.fe, appData.method.feComp);
         
-        % Binary fitting on feature space
-        t = templateSVM('KernelFunction','linear','Standardize',1);
-        mdl = fitcecoc(feats, trnLabels, 'Learners', t, ...
+        try
+            % Binary fitting on feature space
+            t = templateSVM('KernelFunction','linear','Standardize',1);
+            mdl = fitcecoc(feats, trnLabels, 'Learners', t, ...
                         'ClassNames', unique(trnLabels));
 
-        % Empirical error, in-sample estimate
-        [oofLabels, ~] = predict(mdl, feats);
+             % Empirical error, in-sample estimate
+            [oofLabels, ~] = predict(mdl, feats);
+            predictedLabels(:, reg) = oofLabels;
+            acc(reg) = sum(oofLabels==trnLabels)/numel(trnLabels);
+        catch
+            acc(reg) = 0;
+        end
 
-        predictedLabels(:, reg) = oofLabels;
-        acc(reg) = sum(oofLabels==trnLabels)/numel(trnLabels);
     end
 
-    fprintf('\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\bAll\n');
-    disp(['Averaged accuracy for resubs: ' num2str(mean(acc))]);
+    if appData.verbose, 
+        fprintf('\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\bAll\n');
+        disp(['Averaged accuracy for resubs: ' num2str(mean(acc))]);
+    end
 
 
     %% Statistical Inference
@@ -92,16 +112,16 @@ function sam(appData)
     if bar~=0, waitbar(1, bar, 'Performing statistical inference'); end
 
 	%Comute the theoretical bounds
-    alpha = 0.05;
     [boundVC, boundG, boundGZ] = sam_bounds(appData.images.num, ...
-                appData.method.feComp, alpha);
+                appData.method.feComp, appData.stat.alpha);
 
     % Compute z statistic
-    boundAcc = acc' - boundG;
-    [~,p] = sam_zStatistic(boundAcc, mean([boundAcc; acc']), alpha);
+    bound = boundG;
+    if strcmpi(appData.stat.boundMethod, 'Vapnik'), bound = boundVC; end
+    [~,p] = sam_zStatistic(acc, bound, appData.stat.alpha);
 
     % Compute indices of significative regions
-    sigReg = p < alpha;
+    sigReg = p < appData.stat.alpha;
     
     %% Obtaining SAM map
 
@@ -129,7 +149,9 @@ function sam(appData)
     res.mapBg = squeeze(mean(appData.images.stack));  % Background
     res.map = samMap;
     %res.pMap = pMap;
-    sam_showResults(res, appData.atlas);
+    if appData.gui, sam_showResults(res, appData.atlas); end
+    if nargout > 0, out = res; end
+       
     
 end
 
