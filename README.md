@@ -16,7 +16,7 @@ Usage
 
 Cite as
 -------
-Gorriz, J. M., C. Jimenez-Mesa, R. Romero-Garcia, F. Segovia, J. Ramirez, D. Castillo-Barnes, F. J. Martinez-Murcia, et al. «Statistical Agnostic Mapping: A Framework in Neuroimaging Based on Concentration Inequalities». Information Fusion 66 (1 de febrero de 2021): 198-212. https://doi.org/10.1016/j.inffus.2020.09.008.
+Gorriz, J. M., C. Jimenez-Mesa, R. Romero-Garcia, F. Segovia, J. Ramirez, D. Castillo-Barnes, F. J. Martinez-Murcia, et al. «Statistical Agnostic Mapping: A Framework in Neuroimaging Based on Concentration Inequalities». Information Fusion 66 (February 1, 2021): 198-212. https://doi.org/10.1016/j.inffus.2020.09.008.
 
 
 FeedBack
