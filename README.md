@@ -7,9 +7,9 @@ A framework based on SLT that provides similar activation maps than the ones obt
 
 Usage
 -------
-1. Download the package to a local folder.
+1. Download and extract the package to a local folder.
 
-2. Open Matlab and navigate to the folder.
+2. Open Matlab and navigate to the folder containig SAM.
 
 3. Run SAM GUI by entering 'sam' in the Matlab Command Window. 
 
