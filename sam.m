@@ -16,13 +16,16 @@ function out = sam(appData)
     % For non-GUI executions, the input argument should be:
     %   appdata.class0.files:       Files with images of class 0 (cell array)
     %   appdata.class0.files:       Files with images of class 1 (cell array)
-    %   appdata.method.fs:          Feature selection method: Posible values: 
+    %   appdata.method.fs:          Feature selection method. Values: 
     %                               'anova', 'ttest','entropy','wilcoxon','roc'
     %   appdata.method.fsMaxReg:    Number of features seleted
     %   appdata.method.fe:          Feature extraction method: Posible
     %                               values: 'pls'
     %   appdata.method.feComp:      Number of features extracted
-    %
+    %   appdata.bound.name:         Upper bound method. Values:
+    %                               'G','GZ','Vapnik','Bayes'
+    %   appdata.bound.dropout:      Dropout rate for PAC-Bayes upper bound.
+    %   
     
     %% Initial checks
     
@@ -44,6 +47,9 @@ function out = sam(appData)
     % Show waitbar if GUI was loaded
     if appData.gui, bar = waitbar(0, 'Starting SAM...'); else bar = 0; end
         
+    % Create empty struct for results
+    resData = struct();
+
     %% Save self path
     appData.samPath = fileparts(which('sam'));
 
@@ -57,8 +63,9 @@ function out = sam(appData)
     end
     %% Estimate accuracy
     
-    predictedLabels = [];
-    acc = [];
+    predictedLabels = zeros(appData.images.num, appData.atlas.numReg);
+    acc = zeros(1, appData.atlas.numReg);
+    model = cell(1, appData.atlas.numReg);
     if appData.verbose, fprintf('Analyzing region:                     \n'); end
     for reg = 1:appData.atlas.numReg
         if appData.verbose
@@ -95,63 +102,50 @@ function out = sam(appData)
             [oofLabels, ~] = predict(mdl, feats);
             predictedLabels(:, reg) = oofLabels;
             acc(reg) = sum(oofLabels==trnLabels)/numel(trnLabels);
+            model{reg}=mdl;
         catch
             acc(reg) = 0;
         end
 
     end
+    resData.acc = acc;
+    resData.model = model;
 
-    if appData.verbose, 
+    if appData.verbose
         fprintf('\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\bAll\n');
         disp(['Averaged accuracy for resubs: ' num2str(mean(acc))]);
-    end
-
-
-    %% Statistical Inference
-
-    if bar~=0, waitbar(1, bar, 'Performing statistical inference'); end
-
-	%Comute the theoretical bounds
-    [boundVC, boundG, boundGZ] = sam_bounds(appData.images.num, ...
-                appData.method.feComp, appData.stat.alpha);
-
-    % Compute z statistic
-    bound = boundG;
-    if strcmpi(appData.stat.boundMethod, 'Vapnik'), bound = boundVC; end
-    [~,p] = sam_zStatistic(acc, bound, appData.stat.alpha);
-
-    % Compute indices of significative regions
-    sigReg = p < appData.stat.alpha;
-    
-    %% Obtaining SAM map
-
-    if bar~=0, waitbar(1, bar, 'Generating SAM map'); end
-
-    % Initialize SAM map y p-Value map
-    samMap = zeros(size(appData.atlas.nii.img));
-
-    % Estimate all ROIs. Non-releavant ROIs are set to NaN
-    for reg = 1:appData.atlas.numReg
-        if sigReg(reg), activ = acc(reg); else, activ = nan; end
-        samMap(appData.atlas.nii.img == reg) = activ;
     end
 
     % Close wait bar
     if bar~=0, close(bar); end
 
-    % Show results
-    res.acc = acc;
-    res.p = p;
-    res.boundVC = boundVC;
-    res.boundG = boundG;
-    res.boundGZ = boundGZ;
-    res.sigReg = sigReg;
-    res.mapBg = squeeze(mean(appData.images.stack));  % Background
-    res.map = samMap;
-    %res.pMap = pMap;
-    if appData.gui, sam_showResults(res, appData.atlas); end
-    if nargout > 0, out = res; end
-       
+    %% Compute bound and map
+    
+    % Compute bound
+    if ~isfield(appData,'bound')
+        appData.bound = struct('name', 'G', 'dropout', 0.95);
+    end
+    resData.bound = appData.bound;
+    resData.bound.list = sam_bound('getList');
+    resData.bound.value = sam_bound(resData.bound.name, appData.images.num, ...
+                                    appData.method.feComp, appData.stat.alpha, ...
+                                    resData.model, resData.acc, resData.bound.dropout);
+
+    % Compute SAM map
+    [resData.map, resData.p, resData.sigReg] = sam_map(resData.acc, ...
+                        resData.bound.value, appData.stat.alpha, appData.atlas);
+
+
+    %% Show results
+
+    resData.dim = appData.method.feComp;
+    resData.n = appData.images.num;
+    resData.alpha = appData.stat.alpha;
+    resData.mapBg = squeeze(mean(appData.images.stack));  % Background
+    resData.atlas = appData.atlas;
+
+    if appData.gui, sam_showResults(resData); end
+    if nargout > 0, out = resData; end
     
 end
 

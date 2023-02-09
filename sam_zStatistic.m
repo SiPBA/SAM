@@ -21,7 +21,7 @@
 %
 function [thres, p, zAcc, interval] = sam_zStatistic(acc, bound, alpha)
 
-    accCor = acc' - bound;       % Accuracy values (corrected)
+    accCor = (acc - bound)';       % Accuracy values (corrected)
     pi0 = mean([accCor; acc']);  % Mean value for the known proportions 
                                  % (worst case corrected and uncorrected) 
 
